@@ -1,0 +1,164 @@
+---
+title: "Project 1"
+author: "Yaohua Liu"
+date: "1/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read Data
+```{r, warning = FALSE}
+library(ggplot2)
+library(dplyr)
+
+train <- read.csv("train.csv", stringsAsFactors = FALSE)
+test <- read.csv("test.csv", stringsAsFactors = FALSE)
+
+```
+
+### Length of words 
+
+## Cleaning Data
+
+```{R}
+library(tm)
+library(stringr)
+library(SnowballC) 
+
+remove_url <- function(text){
+  gsub("http[^[:space:]]*", "", text)
+}
+
+remove_nonascii <- function(text){
+  iconv(text, "latin1", "ASCII", sub = "")
+}
+
+clean <- function(text){
+  
+  text <- tolower(text) # converts all words to lower case
+  text <- remove_url(text) # remove url
+  text <- removeWords(text, stopwords("english")) # remove stopwrods
+  text <- remove_nonascii(text) # remove characters that are not ASCII
+  text <- removePunctuation(text)# Remove punctuation
+  text <- removeNumbers(text) # remove any numbers
+  text <- stripWhitespace(text) # remove wihtespace
+  text <- stemDocument(text) # word stem
+  
+  text
+  
+# we see some undesired stemming results: wildfires -> wildfir, but conceptually speaking, as long as it is consistent and still uniquely defined, it should still accomplish its role as a predictor to our model
+}
+
+```
+
+### Creating document-term matrix
+```{r}
+## Train
+train$cleaned <- clean(train$text)
+
+train.corp <- VectorSource(train$cleaned)
+train.corp <- Corpus(train.corp)
+
+train.dtm <- DocumentTermMatrix(train.corp, control = list(weighting = "weightTfIdf"))
+# Use frequency-inverse weights  to reduce bias 
+
+train_sparse_dtm99 <- as.matrix(removeSparseTerms(train.dtm, sparse = .99)) # 103 tokens We will use this one for our train
+train_sparse_dtm98 <- as.matrix(removeSparseTerms(train.dtm, sparse = .98)) # 20 tokens
+train_sparse_dtm95 <- as.matrix(removeSparseTerms(train.dtm, sparse = .95)) # 1 token
+
+
+## Test
+test$cleaned <- clean(test$text)
+
+test.corp <- VectorSource(test$cleaned)
+test.corp <- Corpus(test.corp)
+
+test.dtm <- DocumentTermMatrix(test.corp, control = list(weighting = "weightTfIdf"))
+test_sparse_dtm99 <- as.matrix(removeSparseTerms(test.dtm, sparse = .99))
+
+## Finding intersection
+train.df <- data.frame(train_sparse_dtm99[,intersect(colnames(train_sparse_dtm99), colnames(test_sparse_dtm99))])
+test.df <- data.frame(test_sparse_dtm99[,intersect(colnames(test_sparse_dtm99), colnames(train_sparse_dtm99))])
+```
+
+## Exploratory analysis
+
+### Target Distribution
+```{r}
+table <- train %>% group_by(target) %>%
+  count()
+table
+ggplot(table, aes(x = as.factor(c(0,1)), y = table$n)) +
+  geom_bar(stat = "identity", color = "blue", fill = rgb(0.1,0.4, 0.5))+
+  ggtitle("Distribution of Target variable")
+```
+
+From the table and the plot, we can see that this is a balanced classification problem that does not need any sampling methods.
+
+### Frequency
+```{r}
+library(tidytext)
+tbl <- train %>%
+  unnest_tokens(output = word, input = cleaned)
+
+tbl_tfidf <- tbl %>%
+  count(target,word) %>%
+  bind_tf_idf(term = word, document = target, n = n)
+head(tbl_tfidf)
+
+plot_freq <- tbl_tfidf %>% 
+  group_by(target) %>%
+  top_n(10, wt = tf_idf) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, target, sep = "_")) %>%
+  ggplot(aes(word, tf_idf)) +
+  geom_col() +
+  scale_x_reordered() +
+  labs(x = NULL, y = "tf-idf")+
+  facet_wrap(~ target, scales = "free")+
+  coord_flip()
+
+plot_freq
+```
+
+
+
+## Model
+```{r}
+library(caret)
+
+#$ Logistic Regression
+
+logfit <- glm()
+
+## Random forest 
+control <- trainControl(method = "repeatedcv", number = 5, repeats = 3)
+rf <- train(x = train.df,
+            y = factor(train$target),
+            method = "ranger",
+            num.trees = 20,
+            trControl = control)
+
+plot(rf)
+rf$finalModel
+```
+
+## Validation
+
+```{r}
+## Random Forest
+
+pred <- predict(rf, newdata = test.df)
+ans <- data.frame('id' = test$id, 'target' = pred)
+write.csv(ans, file = "rf_wo_tuning.csv", row.names = FALSE)
+
+## Score of 67.177% on Kaggle (F1)
+
+
+
+```
+
+
